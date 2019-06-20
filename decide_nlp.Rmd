@@ -1,0 +1,350 @@
+---
+title: "Civis Decide Topic Modeling"
+output: html_notebook
+---
+
+```{r}
+# read in the libraries we're going to use
+library(tidverse) # general utility & workflow functions
+library(tidytext) # tidy implimentation of NLP methods
+library(topicmodels) # for LDA topic modelling 
+library(tm) # general text mining functions, making document term matrixes
+library(SnowballC) # for stemming
+library(textclean)
+library(wordcloud)
+
+proposals <- read_delim("./data/proposals.csv", ";")
+# Remove HTML tags
+proposals$clean_description <- replace_html(proposals$description, FALSE)
+# transform created at into date type and create year
+proposals$created_at <- as.Date(proposals$created_at, "%d/%m/%Y")
+proposals$year <- format(proposals$created_at, '%Y')
+```
+
+```{r}
+# Clean and tokenize dataset
+# define stop words
+spanish_stop_words <- tibble(full_word = tm::stopwords("spanish"),
+                          lexicon = "spanish")
+
+custom_stop_words <- tibble(full_word = c("madrid", "https", "http", "proposals", "propuestas", 
+                                     "si", "mas", "apoyos", "hacer", "ser", "propuesta", "etc", "toda", 
+                                     "decide.madrid.es", "https://decide.madrid.es"),
+                          lexicon = "custom")
+
+# create tokens and stemmed tokens
+proposal_tokens <- proposals %>%
+  unnest_tokens(output=full_word, input=clean_description) %>%
+  filter(!str_detect(full_word, "^[0-9]*$")) %>%  # filter out numbers
+  filter(!str_detect(full_word, "(\\(|\\))")) %>% # filter out parantheses
+  anti_join(spanish_stop_words) %>% # filter out spanish words
+  anti_join(custom_stop_words) %>% # filter out additional words
+  mutate(stem_word = SnowballC::wordStem(full_word, language="es")) # create column with word stems
+
+head(proposal_tokens)
+```
+```{r}
+proposal_tokens_tf_idf <- proposal_tokens %>%
+  count(id,full_word, sort=TRUE) 
+  bind_tf_idf(full_word, id, n)
+
+proposal_tokens_tf_idf %>%
+  arrange(desc(tf_idf))
+```
+
+```{r}
+# Create DTM on Full Words using term frequency
+proposal_dtm <- proposal_tokens %>%
+  # get count of each token in each document
+  count(id, full_word) %>%
+  # create a document-term matrix with all features and tf weighting
+  cast_dtm(document = id, term = full_word, value = n, weighting = tm::weightTf)
+  # cast_dtm(document = id, term = stem_word, value = n, weighting = tm::weightTfIdf)
+
+proposal_dtm <- removeSparseTerms(proposal_dtm, sparse = .99)
+
+# remove empty rows
+proposal_dtm <- proposal_dtm[unique(proposal_dtm$i),]
+```
+
+```{r}
+findFreqTerms(proposal_dtm, 1000)
+```
+
+```{r}
+full_word_freq = data.frame(sort(colSums(as.matrix(proposal_dtm)), decreasing=TRUE))
+wordcloud(rownames(full_word_freq), full_word_freq[,1], max.words=50, colors=brewer.pal(3, "Dark2"))
+```
+
+```{r}
+proposal_lda <- LDA(proposal_dtm, k = 5, control = list(seed = 123))
+proposal_lda_10 <- LDA(proposal_dtm, k = 10, control = list(seed = 123))
+proposal_lda_15 <- LDA(proposal_dtm, k = 15, control = list(seed = 123))
+proposal_lda
+```
+
+```{r}
+# Turn it into Tidy Text
+proposal_lda_td <- tidy(proposal_lda) # turn it into tidy format
+proposal_lda_td_10 <- tidy(proposal_lda_10) # turn it into tidy format
+proposal_lda_td_15 <- tidy(proposal_lda_15) # turn it into tidy format
+head(proposal_lda_td)
+
+```
+
+```{r}
+# Get top terms
+top_terms <- proposal_lda_td %>%
+  group_by(topic) %>%
+  top_n(5, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+top_terms_10 <- proposal_lda_td_10 %>%
+  group_by(topic) %>%
+  top_n(5, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+top_terms_15 <- proposal_lda_td_15 %>%
+  group_by(topic) %>%
+  top_n(5, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+top_terms
+```
+
+```{r}
+# Visualize top terms
+top_terms %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free", ncol = 2) +
+  coord_flip()
+```
+```{r}
+top_terms_10 %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free", ncol = 3) +
+  coord_flip()
+```
+
+```{r}
+# Run LDA using Term Frequency on Stemmed Words
+proposal_dtm_stemmed <- proposal_tokens %>%
+  # get count of each token in each document
+  count(id, stem_word) %>%
+  # create a document-term matrix with all features and tf weighting
+  cast_dtm(document = id, term = stem_word, value = n, weighting = tm::weightTf)
+  # cast_dtm(document = id, term = stem_word, value = n, weighting = tm::weightTfIdf)
+
+proposal_dtm_stemmed <- removeSparseTerms(proposal_dtm_stemmed, sparse = .99)
+
+# remove empty rows
+proposal_dtm_stemmed <- proposal_dtm_stemmed[unique(proposal_dtm_stemmed$i),]
+
+# get frequency
+findFreqTerms(proposal_dtm_stemmed, 1000)
+```
+
+```{r}
+# create word cloud
+stemmed_word_freq = data.frame(sort(colSums(as.matrix(proposal_dtm_stemmed)), decreasing=TRUE))
+wordcloud(rownames(stemmed_word_freq), stemmed_word_freq[,1], max.words=50, colors=brewer.pal(1, "Dark2"))
+```
+
+proposal_lda_stemmed <- LDA(proposal_dtm_stemmed, k = 5, control = list(seed = 123))
+proposal_lda_stemmed
+
+# Turn it into Tidy Text
+proposal_lda_stemmed_td <- tidy(proposal_lda_stemmed) # turn it into tidy format
+head(proposal_lda_stemmed_td)
+```
+
+```{r}
+# Get top terms
+top_terms_stemmed <- proposal_lda_stemmed_td %>%
+  group_by(topic) %>%
+  top_n(5, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+top_terms_stemmed
+```
+```{r}
+# Visualize top stemmed terms
+top_terms_stemmed %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free", ncol = 4) +
+  coord_flip()
+```
+
+```{r}
+get_word_counts <- function(word_tokens, col_name) {
+  word_count_df <- word_tokens %>%
+    count(!!col_name, sort = TRUE)
+  
+  return(word_count_df)
+}
+
+ word_count <- get_word_counts(proposal_tokens, quo(full_word))
+ stem_word_count <- get_word_counts(proposal_tokens, quo(stem_word))
+ 
+get_dtm <- function(tokens, col_name) {
+  dtm <- tokens %>%
+    # get count of each token in each document
+    count(id, !!col_name) %>%
+    # create a document-term matrix with all features and tfIDF weighting
+    cast_dtm(document = id, term = !!col_name, value = n, weighting=tm::weightTfIdf)
+    # cast_dtm(document = id, term = tokens[[col_name]], value = n)
+    # remove documents with no terms remaining
+    dtm <- dtm[unique(dtm$i),]
+  return(dtm)
+}
+
+show_top_topic_terms <- function(dtm, number_of_topics, sd=123) {
+  # run LDA
+  lda_mod <- LDA(x=dtm, k = number_of_topics, control = list(seed = sd))
+  
+  # turn LDA into tidy format
+  lda_td <- tidy(lda_mod) 
+  
+  # get top terms
+  top_terms <- lda_td %>%
+    group_by(topic) %>%
+    top_n(5, beta) %>%
+    ungroup() %>%
+    arrange(topic, -beta)
+  
+  # visualize top terms
+  top_terms %>%
+    mutate(term = reorder(term, beta)) %>%
+    ggplot(aes(term, beta, fill = factor(topic))) +
+    geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free", ncol = 4) +
+    coord_flip()
+  
+  return(lda_mod)
+}
+
+proposal_dtm_non_stemmed <- get_dtm(proposal_tokens, quo(full_word))
+lda_non_stemmed_10 <- show_top_topic_terms(dtm=proposal_dtm_non_stemmed, number_of_topics=10)
+lda_non_stemmed_10
+```
+
+```{r}
+lda_non_stemmed_5 <- show_top_topic_terms(dtm=proposal_dtm_non_stemmed, number_of_topics=5)
+lda_non_stemmed_5
+```
+
+```{r}
+n_topics <- c(2, 4, 10, 20, 50, 100)
+```
+
+```{r}
+
+top_terms_by_topic_LDA <- function(input_text, # should be a columm from a dataframe
+                                   plot = T, # return a plot? TRUE by defult
+                                   number_of_topics = 4) # number of topics (4 by default) 
+  {    
+    # create a corpus (type of object expected by tm) and document term matrix
+    Corpus <- Corpus(VectorSource(input_text)) # make a corpus object
+    DTM <- DocumentTermMatrix(Corpus) # get the count of words/document
+
+    # remove any empty rows in our document term matrix (if there are any 
+    # we'll get an error when we try to run our LDA)
+    unique_indexes <- unique(DTM$i) # get the index of each unique value
+    DTM <- DTM[unique_indexes,] # get a subset of only those indexes
+    
+    # preform LDA & get the words/topic in a tidy text format
+    lda <- LDA(DTM, k = number_of_topics, control = list(seed = 1234))
+    topics <- tidy(lda, matrix = "beta")
+
+    # get the top ten terms for each topic
+    top_terms <- topics  %>% # take the topics data frame and..
+      group_by(topic) %>% # treat each topic as a different group
+      top_n(10, beta) %>% # get the top 10 most informative words
+      ungroup() %>% # ungroup
+      arrange(topic, -beta) # arrange words in descending informativeness
+
+    # if the user asks for a plot (TRUE by default)
+    if(plot == T){
+        # plot the top ten terms for each topic in order
+        top_terms %>% # take the top terms
+          mutate(term = reorder(term, beta)) %>% # sort terms by beta value 
+          ggplot(aes(term, beta, fill = factor(topic))) + # plot beta by theme
+          geom_col(show.legend = FALSE) + # as a bar plot
+          facet_wrap(~ topic, scales = "free") + # which each topic in a seperate plot
+          labs(x = NULL, y = "Beta") + # no x label, change y label 
+          coord_flip() # turn bars sideways
+    }else{ 
+        # if the user does not request a plot
+        # return a list of sorted terms instead
+        return(top_terms)
+    }
+}
+
+
+# top_terms_by_topic_LDA(proposals$clean_description, number_of_topics = 5)
+```
+
+```{r}
+# Define my stop words
+custom_stop_words <- tibble(term = tm::stopwords("spanish"),
+                          lexicon = "custom")
+
+# create a document term matrix to clean
+proposalsCorpus <- Corpus(VectorSource(proposals$clean_description)) 
+proposals_DTM <- DocumentTermMatrix(proposalsCorpus,
+                                   control = list(removePunctuation = TRUE,
+                                                  weighting = function(x) weightTfIdf(x, normalize = FALSE),
+                                                  stopwords = TRUE))
+
+proposals_DTM <- removeSparseTerms(proposals_DTM, 0.99)
+# convert the document term matrix to a tidytext corpus
+tidy_proposals_DTM <- tidy(proposals_DTM)
+
+# clean documents reconstruct
+cleaned_documents <- tidy_proposals_DTM %>% # take our tidy dtm and...
+    anti_join(custom_stop_words)  %>% # remove my stopwords and...
+    mutate(stem_word = wordStem(term)) %>% # stem words
+    # reconstruct cleaned documents (so that each word shows up the correct number of times)
+    group_by(document) %>% 
+    mutate(terms = toString(rep(term, count))) %>%
+    select(document, terms) %>%
+    unique()
+    
+
+# check out what the cleaned documents look like (should just be a bunch of content words)
+# in alphabetic order
+head(cleaned_documents)
+```
+
+```{r}
+top_terms_by_topic_LDA(cleaned_documents$terms, number_of_topics = 10)
+```
+
+```{r}
+simple_tokens <- tibble(full_word=c("due","overcrowding", "madrid", 
+                                    "cpa", "la", "fortuna", "propose", 
+                                    "creation", "animal", "protection", 
+                                    "center", "managed", "animal", 
+                                    "protection", "association"),
+                        id=1)
+simple_dtm <- simple_tokens %>%
+  count(id, full_word) %>%
+  # create a document-term matrix with all features and tf weighting
+  cast_dtm(document = id, term = full_word, value = n, weighting = tm::weightTf)
+
+findFreqTerms(simple_dtm)
+simple_dtm_freq = data.frame(sort(colSums(as.matrix(simple_dtm)), decreasing=TRUE))
+wordcloud(rownames(simple_dtm_freq), simple_dtm_freq[,1], max.words=50, colors=brewer.pal(1, "Dark2"))
+```
+
+
