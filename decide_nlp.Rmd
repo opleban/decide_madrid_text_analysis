@@ -5,7 +5,7 @@ output: html_notebook
 
 ```{r}
 # read in the libraries we're going to use
-library(tidverse) # general utility & workflow functions
+library(tidyverse) # general utility & workflow functions
 library(tidytext) # tidy implimentation of NLP methods
 library(topicmodels) # for LDA topic modelling 
 library(tm) # general text mining functions, making document term matrixes
@@ -19,6 +19,7 @@ proposals$clean_description <- replace_html(proposals$description, FALSE)
 # transform created at into date type and create year
 proposals$created_at <- as.Date(proposals$created_at, "%d/%m/%Y")
 proposals$year <- format(proposals$created_at, '%Y')
+# TODO filter out clearly malformed proposals
 ```
 
 ```{r}
@@ -44,8 +45,10 @@ proposal_tokens <- proposals %>%
 head(proposal_tokens)
 ```
 ```{r}
+# TODO join proposals with tags dataset and then group by category to produce meaningful tf_idf
+# Need to handle this by categories
 proposal_tokens_tf_idf <- proposal_tokens %>%
-  count(id,full_word, sort=TRUE) 
+  count(id,full_word, sort=TRUE) %>% 
   bind_tf_idf(full_word, id, n)
 
 proposal_tokens_tf_idf %>%
@@ -156,7 +159,7 @@ findFreqTerms(proposal_dtm_stemmed, 1000)
 stemmed_word_freq = data.frame(sort(colSums(as.matrix(proposal_dtm_stemmed)), decreasing=TRUE))
 wordcloud(rownames(stemmed_word_freq), stemmed_word_freq[,1], max.words=50, colors=brewer.pal(1, "Dark2"))
 ```
-
+```{r}
 proposal_lda_stemmed <- LDA(proposal_dtm_stemmed, k = 5, control = list(seed = 123))
 proposal_lda_stemmed
 
@@ -201,7 +204,7 @@ get_dtm <- function(tokens, col_name) {
     # get count of each token in each document
     count(id, !!col_name) %>%
     # create a document-term matrix with all features and tfIDF weighting
-    cast_dtm(document = id, term = !!col_name, value = n, weighting=tm::weightTfIdf)
+    cast_dtm(document = id, term = !!col_name, value = n, weighting=tm::weightTf)
     # cast_dtm(document = id, term = tokens[[col_name]], value = n)
     # remove documents with no terms remaining
     dtm <- dtm[unique(dtm$i),]
@@ -241,10 +244,6 @@ lda_non_stemmed_10
 ```{r}
 lda_non_stemmed_5 <- show_top_topic_terms(dtm=proposal_dtm_non_stemmed, number_of_topics=5)
 lda_non_stemmed_5
-```
-
-```{r}
-n_topics <- c(2, 4, 10, 20, 50, 100)
 ```
 
 ```{r}
